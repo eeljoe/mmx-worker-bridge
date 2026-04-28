@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+mmx-subagent-runs/
+mmx-worker-worktrees/
+tmp/

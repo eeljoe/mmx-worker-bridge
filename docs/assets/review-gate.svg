@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="330" viewBox="0 0 980 330" role="img" aria-labelledby="title desc">
+  <title id="title">Review gate safety model</title>
+  <desc id="desc">MMX worker output passes through artifacts, patch validation, owned paths, and lead-agent review before changes merge.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#31213d"/>
+    </marker>
+    <style>
+      .bg{fill:#f5eff8}
+      .box{fill:#fff;stroke:#31213d;stroke-width:2}
+      .warn{fill:#ffe9d6;stroke:#8a4b22;stroke-width:2}
+      .ok{fill:#e2f3e8;stroke:#255a38;stroke-width:2}
+      .text{font-family:Arial, sans-serif;fill:#261a30}
+      .title{font-size:24px;font-weight:700}
+      .small{font-size:14px}
+      .arrow{stroke:#31213d;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="980" height="330" rx="26" class="bg"/>
+  <text x="42" y="50" class="text title">Review gate: useful workers, controlled writes</text>
+  <text x="42" y="76" class="text small">The worker can investigate and propose, but the lead agent controls what lands.</text>
+
+  <rect x="46" y="128" width="170" height="92" rx="16" class="box"/>
+  <text x="82" y="164" class="text small">MMX worker</text>
+  <text x="82" y="190" class="text small">tool results</text>
+
+  <rect x="270" y="128" width="170" height="92" rx="16" class="warn"/>
+  <text x="304" y="164" class="text small">Patch artifact</text>
+  <text x="304" y="190" class="text small">not auto-merged</text>
+
+  <rect x="494" y="128" width="170" height="92" rx="16" class="box"/>
+  <text x="526" y="164" class="text small">Validation</text>
+  <text x="526" y="190" class="text small">root + owns</text>
+
+  <rect x="718" y="128" width="216" height="92" rx="16" class="ok"/>
+  <text x="748" y="164" class="text small">Lead-agent review</text>
+  <text x="748" y="190" class="text small">diff + tests + decision</text>
+
+  <path d="M222 174 H262" class="arrow"/>
+  <path d="M446 174 H486" class="arrow"/>
+  <path d="M670 174 H710" class="arrow"/>
+  <text x="88" y="268" class="text small">No arbitrary shell</text>
+  <text x="322" y="268" class="text small">No main-worktree write by default</text>
+  <text x="698" y="268" class="text small">Merge only after human/lead approval</text>
+</svg>

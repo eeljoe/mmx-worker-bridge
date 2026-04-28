@@ -1,0 +1,51 @@
+"""MiniMax-powered external coding workers for Codex and Claude workflows."""
+
+from .core import (
+    BatchItemResult,
+    BatchRunResult,
+    BatchTask,
+    InstallResult,
+    MmxCliClient,
+    MmxWorker,
+    PatchReviewResult,
+    ReadOnlyTools,
+    RunResult,
+    WorkerConfig,
+    WorktreeResult,
+    _resolve_executable,
+    create_isolated_worktree,
+    extract_text,
+    extract_tool_uses,
+    install_stable_tool,
+    load_batch_tasks,
+    main,
+    review_patch,
+    run_batch_tasks,
+    validate_batch_ownership,
+)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "BatchItemResult",
+    "BatchRunResult",
+    "BatchTask",
+    "InstallResult",
+    "MmxCliClient",
+    "MmxWorker",
+    "PatchReviewResult",
+    "ReadOnlyTools",
+    "RunResult",
+    "WorkerConfig",
+    "WorktreeResult",
+    "_resolve_executable",
+    "create_isolated_worktree",
+    "extract_text",
+    "extract_tool_uses",
+    "install_stable_tool",
+    "load_batch_tasks",
+    "main",
+    "review_patch",
+    "run_batch_tasks",
+    "validate_batch_ownership",
+]
