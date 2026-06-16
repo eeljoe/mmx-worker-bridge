@@ -1,137 +1,157 @@
 # mmx-worker-bridge
 
-English | [中文](README.zh-CN.md)
+[English](README_en.md) | 中文
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-24%20passed-brightgreen?logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/tests-31%20passed-brightgreen?logo=pytest)](tests/)
 [![Code Style](https://img.shields.io/badge/code%20style-dataclass-blue)](https://docs.python.org/3/library/dataclasses.html)
 
-**Sandboxed multi-agent orchestration bridge** — delegates bounded coding tasks to MiniMax as an external worker, with lead-agent review gates, git worktree isolation, and patch-based code review.
+**沙箱化多智能体编排桥接器** — 将有界编码任务委派给 MiniMax 作为外部 worker，具备主智能体审核门控、git worktree 隔离和基于 patch 的代码审查。
 
-![Architecture](docs/assets/architecture.svg)
-
----
-
-## Abstract
-
-Modern AI coding assistants (Claude Code, Codex CLI) excel as lead agents but face challenges with multi-provider credential management and autonomous execution reliability. `mmx-worker-bridge` addresses this by wrapping the MiniMax `mmx` CLI as a **sandboxed external worker** within a lead-agent orchestration pattern.
-
-The system implements a **review-gate architecture**: the worker operates in a root-scoped sandbox with constrained tools (file reads, search, glob discovery, read-only commands), produces reviewable artifacts (`result.md`, `run.jsonl`, `proposed_patches/`), and only applies changes through a lead-agent-approved patch workflow. Write operations require explicit git worktree isolation, path ownership declarations, and `git apply --check` validation.
-
-**Key insight**: MiniMax demonstrates strong instruction-following for bounded sub-agent tasks, making it more suitable as a delegated worker than a main session agent. This bridge leverages that strength while maintaining human-in-the-loop review at every write boundary.
+![架构图](docs/assets/architecture.svg)
 
 ---
 
-## Features
+## ⚠️ 项目定位与历史背景
 
-| Category | Capability |
-|----------|-----------|
-| **Sandboxed Execution** | Root-scoped file operations, shell injection prevention, path traversal protection |
-| **Review Gate** | All patches require lead-agent approval before application |
-| **Git Worktree Isolation** | Write operations occur in isolated branches, never the main worktree |
-| **Path Ownership** | Batch tasks declare owned paths; overlapping ownership is rejected |
-| **Agentic Tool Loop** | Multi-step tool-use loop with `read_file`, `rg_search`, `list_dir`, `glob_find`, `run_command`, `propose_patch`, `apply_patch`, `final_answer` |
-| **Batch Execution** | Parallel task execution with conflict detection and dry-run validation |
-| **Retry with Backoff** | Exponential backoff for transient `mmx` CLI failures |
-| **Artifact Protocol** | Structured outputs: `result.md`, `run.jsonl`, `proposed_patches/*.diff`, `batch.summary.json` |
+> **重要说明**：随着 **Pi Agent** 的出现，本项目的实际应用价值已大幅降低。
+>
+> 本项目诞生于 MiniMax 按**调用次数计费**的时代，当时 API 调用量大，非常适合让 MiniMax 充当"小工"角色——处理屎山代码清理、批量重构、枯燥重复的简单任务。这种"主智能体 + 外部 worker"的架构设计在当时是合理的。
+>
+> 然而，现在：
+> 1. **Pi Agent** 等更先进的多智能体框架已经能够更高效地实现类似功能，搭建速度更快，效果更佳
+> 2. **MiniMax 已改为 tokens 计费**而非调用次数计费，原有的"次数多=便宜"优势不复存在
+> 3. 实际开发中，直接使用 Pi Agent 搭建的效果远优于本项目的桥接方案
+>
+> **本项目的保留价值**：
+> - 作为**学习参考**：理解多智能体编排、审核门控、沙箱执行的设计模式
+> - 作为**历史案例**：展示从"次数计费"到"tokens 计费"的 API 定价演变对架构选择的影响
+> - 代码中的**安全模型**（路径作用域、patch 验证、所有权冲突检测）仍有借鉴意义
+>
+> 如果你正在构建类似系统，建议直接使用 Pi Agent 或其他现代多智能体框架，而非本项目。
 
 ---
 
-## How It Works
+## 摘要
 
-### Agentic Loop
+现代 AI 编码助手（Claude Code、Codex CLI）作为主智能体表现出色，但在多提供商凭据管理和自主执行可靠性方面面临挑战。`mmx-worker-bridge` 通过将 MiniMax `mmx` CLI 包装为**沙箱化外部 worker**，实现主智能体编排模式来解决这一问题。
+
+系统实现了**审核门控架构**：worker 在根目录作用域沙箱中运行，使用受限工具（文件读取、搜索、glob 发现、只读命令），生成可审核的产物（`result.md`、`run.jsonl`、`proposed_patches/`），只有通过主智能体批准的 patch 工作流才能应用更改。写入操作需要显式的 git worktree 隔离、路径所有权声明和 `git apply --check` 验证。
+
+**核心洞察**：MiniMax 在有界子智能体任务中展现出强大的指令遵循能力，使其更适合作为委派 worker 而非主会话智能体。本桥接器利用这一优势，同时在每个写入边界保持人在回路的审核。
+
+---
+
+## 特性
+
+| 类别 | 能力 |
+|------|------|
+| **沙箱执行** | 根目录作用域文件操作、shell 注入防护、路径遍历保护 |
+| **审核门控** | 所有 patch 在应用前需主智能体批准 |
+| **Git Worktree 隔离** | 写入操作在隔离分支中进行，永不触及主工作树 |
+| **路径所有权** | 批量任务声明拥有的路径；重叠所有权被拒绝 |
+| **智能体工具循环** | 多步工具使用循环：`read_file`、`rg_search`、`list_dir`、`glob_find`、`run_command`、`propose_patch`、`apply_patch`、`final_answer` |
+| **批量执行** | 并行任务执行，冲突检测和 dry-run 验证 |
+| **指数退避重试** | 对瞬态 `mmx` CLI 故障进行指数退避重试 |
+| **产物协议** | 结构化输出：`result.md`、`run.jsonl`、`proposed_patches/*.diff`、`batch.summary.json` |
+
+---
+
+## 工作原理
+
+### 智能体循环
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Lead Agent (Claude / Codex)                                │
-│  ├─ Delegates bounded task                                  │
-│  ├─ Reviews artifacts (result.md, patches, git diff)        │
-│  └─ Decides: apply / reject / request changes               │
+│  主智能体 (Claude / Codex)                                    │
+│  ├─ 委派有界任务                                              │
+│  ├─ 审核产物 (result.md, patches, git diff)                  │
+│  └─ 决策：应用 / 拒绝 / 要求修改                               │
 └──────────────────────────────┬──────────────────────────────┘
                                │ task prompt
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  mmx-worker-bridge                                          │
-│  ├─ Constructs system prompt with tool schemas              │
-│  ├─ Invokes mmx text chat --messages-file                   │
-│  ├─ Parses tool_use responses                               │
-│  ├─ Executes tools in sandbox (ReadOnlyTools)               │
-│  ├─ Feeds tool_result back to mmx                           │
-│  └─ Loops until final_answer or max_steps                   │
+│  ├─ 构建带工具 schema 的 system prompt                       │
+│  ├─ 调用 mmx text chat --messages-file                      │
+│  ├─ 解析 tool_use 响应                                       │
+│  ├─ 在沙箱中执行工具 (ReadOnlyTools)                          │
+│  ├─ 将 tool_result 反馈给 mmx                                │
+│  └─ 循环直到 final_answer 或 max_steps                       │
 └──────────────────────────────┬──────────────────────────────┘
                                │ mmx CLI
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  MiniMax API (credentials managed by mmx auth)              │
+│  MiniMax API (凭据由 mmx auth 管理)                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Write Boundary
+### 写入边界
 
-| Mode | Tools Available | Write Access |
-|------|----------------|--------------|
-| **Default (read-only)** | `read_file`, `rg_search`, `list_dir`, `glob_find`, `run_command`, `propose_patch`, `final_answer` | None — patches saved as artifacts |
-| **Controlled write** | All above + `apply_patch` | Only in git worktree, only for `--owns` paths, only after `git apply --check` passes |
+| 模式 | 可用工具 | 写入权限 |
+|------|---------|---------|
+| **默认（只读）** | `read_file`、`rg_search`、`list_dir`、`glob_find`、`run_command`、`propose_patch`、`final_answer` | 无 — patch 保存为产物 |
+| **受控写入** | 以上全部 + `apply_patch` | 仅在 git worktree 中，仅对 `--owns` 路径，仅在 `git apply --check` 通过后 |
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
 mmx-worker-bridge/
 ├── src/
 │   └── mmx_worker_bridge/
-│       ├── __init__.py          # Public API exports
-│       ├── cli.py               # CLI entry point
-│       ├── core.py              # Worker loop, tools, batch, worktree (~1400 LOC)
-│       ├── client.py            # mmx CLI client wrapper
-│       ├── worker.py            # MmxWorker re-exports
-│       ├── batch.py             # Batch execution re-exports
-│       ├── worktree.py          # Git worktree isolation re-exports
-│       ├── patch_review.py      # Patch review re-exports
-│       └── tools.py             # Tool schema definitions
+│       ├── __init__.py          # 公共 API 导出
+│       ├── cli.py               # CLI 入口点
+│       ├── core.py              # Worker 循环、工具、批量、worktree (~1400 LOC)
+│       ├── client.py            # mmx CLI 客户端封装
+│       ├── worker.py            # MmxWorker 重导出
+│       ├── batch.py             # 批量执行重导出
+│       ├── worktree.py          # Git worktree 隔离重导出
+│       ├── patch_review.py      # Patch 审查重导出
+│       └── tools.py             # 工具 schema 定义
 ├── tests/
-│   └── test_bridge.py           # 24 tests covering security, patches, batch, worktree
+│   └── test_bridge.py           # 31 个测试，覆盖安全性、patch、批量、worktree
 ├── docs/
-│   ├── assets/                  # Architecture diagrams (SVG)
-│   ├── safety.md                # Safety model documentation
-│   ├── claude.md                # Claude Code integration guide
-│   ├── codex.md                 # Codex CLI integration guide
-│   ├── examples.md              # Usage examples
-│   └── release.md               # Release process
+│   ├── assets/                  # 架构图 (SVG)
+│   ├── safety.md                # 安全模型文档
+│   ├── claude.md                # Claude Code 集成指南
+│   ├── codex.md                 # Codex CLI 集成指南
+│   ├── examples.md              # 使用示例
+│   └── release.md               # 发布流程
 ├── examples/
-│   ├── claude-workflow/         # AGENTS.md policy block example
-│   └── codex-skill/             # Codex skill configuration
-├── pyproject.toml               # PEP 621 project metadata
+│   ├── claude-workflow/         # AGENTS.md 策略块示例
+│   └── codex-skill/             # Codex skill 配置
+├── pyproject.toml               # PEP 621 项目元数据
 ├── LICENSE                      # MIT License
-└── README.md                    # This file
+└── README.md                    # 本文件
 ```
 
 ---
 
-## Technical Highlights
+## 技术亮点
 
-- **Zero external dependencies** — pure Python 3.11+ stdlib (`dataclasses`, `subprocess`, `concurrent.futures`, `pathlib`)
-- **Protocol-oriented design** — `CompletionClient` protocol enables mock testing and alternative backends
-- **Security-first tool sandbox** — `run_command` rejects shell metacharacters (`&|;<>`\`()`), root-external paths, and write-oriented commands
-- **Patch validation pipeline** — unified diff parsing → root scope check → ownership check → `git apply --check` → `git apply`
-- **Batch ownership conflict detection** — normalizes paths and detects overlaps before execution
-- **Windows-compatible** — handles `.CMD`/`.BAT` shims via `PATHEXT` resolution
+- **零外部依赖** — 纯 Python 3.11+ 标准库（`dataclasses`、`subprocess`、`concurrent.futures`、`pathlib`）
+- **面向协议设计** — `CompletionClient` 协议支持 mock 测试和替代后端
+- **安全优先的工具沙箱** — `run_command` 拒绝 shell 元字符（`&|;<>`\`()`）、根目录外路径和写入型命令
+- **Patch 验证流水线** — unified diff 解析 → 根目录范围检查 → 所有权检查 → `git apply --check` → `git apply`
+- **批量所有权冲突检测** — 规范化路径并在执行前检测重叠
+- **Windows 兼容** — 通过 `PATHEXT` 解析处理 `.CMD`/`.BAT` shim
 
 ---
 
-## Requirements
+## 环境要求
 
-- Python 3.11 or newer
+- Python 3.11 或更新版本
 - Git
-- The MiniMax `mmx` CLI installed and authenticated
+- 已安装并登录 MiniMax `mmx` CLI
 
 ```powershell
 mmx auth
 ```
 
-## Installation
+## 安装
 
 ```powershell
 git clone git@github.com:eeljoe/mmx-worker-bridge.git
@@ -139,99 +159,99 @@ cd mmx-worker-bridge
 pip install -e .
 ```
 
-## Quickstart
+## 快速开始
 
-### Read-Only Inspection
-
-```powershell
-mmx-worker-bridge --task "Inspect this repository and summarize the test strategy." --root "<project-root>"
-```
-
-### Patch Proposal (No Write)
+### 只读检查
 
 ```powershell
-mmx-worker-bridge --task "Propose a README fix without applying it." --root "<project-root>"
+mmx-worker-bridge --task "检查此仓库并总结测试策略。" --root "<project-root>"
 ```
 
-### Review a Proposed Patch
+### Patch 提议（不写入）
+
+```powershell
+mmx-worker-bridge --task "提议一个 README 修复，不应用它。" --root "<project-root>"
+```
+
+### 审阅提议的 Patch
 
 ```powershell
 mmx-worker-bridge review-patch --root "<project-root>" --patch "<patch.diff>"
 ```
 
-### Controlled Implementation (Git Worktree)
+### 受控实现（Git Worktree）
 
 ```powershell
-# 1. Create isolated worktree
+# 1. 创建隔离 worktree
 mmx-worker-bridge create-worktree --root "<git-root>" --worktree-base "<worktree-dir>" --task-id "docs-update"
 
-# 2. Run worker with write access in worktree
-mmx-worker-bridge --task "Update docs for the new option." --root "<worktree-path>" --allow-write --owns "docs"
+# 2. 在 worktree 中以写入权限运行 worker
+mmx-worker-bridge --task "更新新选项的文档。" --root "<worktree-path>" --allow-write --owns "docs"
 ```
 
-### Batch Execution
+### 批量执行
 
 ```powershell
-# Dry-run to check ownership conflicts
+# Dry-run 检查所有权冲突
 mmx-worker-bridge run-batch --tasks-file "<tasks.json>" --dry-run
 
-# Execute with parallelism
+# 并行执行
 mmx-worker-bridge run-batch --tasks-file "<tasks.json>" --parallel 2
 ```
 
 ---
 
-## Documentation
+## 文档
 
-| Guide | Description |
-|-------|-------------|
-| [Codex Integration](docs/codex.md) | Use mmx-worker-bridge as a Codex skill |
-| [Claude Workflow](docs/claude.md) | Lead-agent workflow with Claude Code |
-| [Safety Model](docs/safety.md) | Sandbox, review gates, write boundaries |
-| [Examples](docs/examples.md) | Common usage patterns |
-| [Agent Install Guide](Install.md) | Machine-readable installation instructions |
-
----
-
-## Safety
-
-![Review Gate](docs/assets/review-gate.svg)
-
-`mmx-worker-bridge` enforces a **lead-agent review gate** for all write operations:
-
-1. **Default mode is read-only** — `run_command` rejects shell syntax, write commands, and root-external paths
-2. **Patches are artifacts** — `propose_patch` saves diffs for review, never applies directly
-3. **Write mode requires isolation** — `apply_patch` only works in git worktrees with `--allow-write` and `--owns` declarations
-4. **Every patch is validated** — unified diff format → root scope → ownership → `git apply --check` → `git apply`
-
-The worker cannot modify files outside its declared scope. The lead agent (Claude, Codex, or human) inspects all artifacts before merging.
+| 指南 | 描述 |
+|------|------|
+| [Codex 集成](docs/codex.md) | 将 mmx-worker-bridge 用作 Codex skill |
+| [Claude 工作流](docs/claude.md) | 与 Claude Code 的主智能体工作流 |
+| [安全模型](docs/safety.md) | 沙箱、审核门控、写入边界 |
+| [示例](docs/examples.md) | 常见使用模式 |
+| [Agent 安装指南](Install.md) | 机器可读的安装说明 |
 
 ---
 
-## Testing
+## 安全性
+
+![审核门控](docs/assets/review-gate.svg)
+
+`mmx-worker-bridge` 对所有写入操作强制执行**主智能体审核门控**：
+
+1. **默认模式为只读** — `run_command` 拒绝 shell 语法、写入命令和根目录外路径
+2. **Patch 作为产物** — `propose_patch` 保存 diff 供审阅，永不直接应用
+3. **写入模式需要隔离** — `apply_patch` 仅在 git worktree 中工作，需 `--allow-write` 和 `--owns` 声明
+4. **每个 patch 都经过验证** — unified diff 格式 → 根目录范围 → 所有权 → `git apply --check` → `git apply`
+
+Worker 无法修改其声明范围外的文件。主智能体（Claude、Codex 或人类）在合并前检查所有产物。
+
+---
+
+## 测试
 
 ```powershell
 pip install pytest
 pytest tests/
 ```
 
-Test coverage includes:
-- Root scope enforcement (path traversal rejection)
-- Shell injection prevention
-- Patch validation and ownership checks
-- Batch ownership conflict detection
-- Git worktree isolation
-- Retry with exponential backoff
-- Tool loop execution with mock clients
+测试覆盖包括：
+- 根目录范围强制执行（路径遍历拒绝）
+- Shell 注入防护
+- Patch 验证和所有权检查
+- 批量所有权冲突检测
+- Git worktree 隔离
+- 指数退避重试
+- 使用 mock 客户端的工具循环执行
 
 ---
 
-## Status
+## 状态
 
-Early extraction from a local prototype. APIs may change before the first stable release.
+项目仍处于早期抽取阶段。第一个稳定版本前 API 可能调整。
 
 ---
 
-## License
+## 许可证
 
 MIT © 2026 mmx-worker-bridge contributors
