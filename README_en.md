@@ -13,53 +13,53 @@
 
 ---
 
-## ⚠️ Background & Current Status
+## ⚠️ Project Background
 
-> **TL;DR**: With **Pi Agent** now available, this project isn't that useful anymore.
+> **Note**: With **Pi Agent** now available, the practical value of this project has decreased.
 >
-> I built this back when MiniMax charged by **API call count**. Calls were abundant and cheap, so it made sense to use MiniMax as a "grunt worker" — handling legacy code cleanup, batch refactoring, and tedious repetitive tasks. The "lead agent + external worker" pattern worked well at the time.
+> This was built when MiniMax charged by **API call count**. Calls were abundant, making MiniMax suitable as an external worker for batch tasks — code cleanup, batch refactoring, repetitive work. The "lead agent + external worker" pattern was reasonable at the time.
 >
-> But things have changed:
-> 1. **Pi Agent** came out — building multi-agent systems is now faster and better with it
-> 2. **MiniMax switched to token-based billing** instead of per-call billing, so the "more calls = cheaper" advantage is gone
-> 3. In practice, using Pi Agent directly gives way better results than this bridge approach
+> Things have changed:
+> 1. **Pi Agent** is now available — building multi-agent systems is faster and better
+> 2. **MiniMax switched to token-based billing** — the "more calls = cheaper" advantage is gone
+> 3. In practice, using Pi Agent directly gives much better results
 >
-> **Why keep this project around?**
-> - Some design patterns in the code are still worth looking at — path sandboxing, patch validation, ownership conflict detection
-> - It's a case study showing how API pricing models (per-call vs. per-token) affect architectural choices
-> - Good for learning how multi-agent orchestration works
+> **Why keep this around**:
+> - Some design patterns are worth referencing: path sandboxing, patch validation, ownership conflict detection
+> - Understanding how API billing models (per-call vs per-token) affect architecture choices
+> - Learning case for multi-agent orchestration
 >
-> If you're building something similar today, just use Pi Agent or other modern multi-agent frameworks. Don't use this.
+> If you're building something similar today, consider using Pi Agent or other modern multi-agent frameworks.
 
 ---
 
 ## What This Is
 
-Basically, this wraps MiniMax's `mmx` CLI as a **sandboxed external worker**.
+This wraps MiniMax's `mmx` CLI as a **sandboxed external worker**.
 
-The problem: Claude Code and Codex CLI work great as lead agents, but managing multi-provider credentials is a pain, and letting AI run fully autonomous is risky. So I made this bridge:
+Claude Code and Codex CLI work great as lead agents, but multi-provider credential management is troublesome and fully autonomous AI execution has risks. This bridge solves that:
 
-- Worker runs in a limited directory scope, can only use restricted tools (read files, search, run read-only commands)
-- Every operation generates reviewable artifacts (`result.md`, `run.jsonl`, `proposed_patches/`)
-- To modify files, you have to go through a patch workflow — lead agent approves before applying
-- Write operations must happen in a git worktree, you need to declare owned paths, and `git apply --check` must pass
+- Worker runs in a limited directory scope with restricted tools (read files, search, read-only commands)
+- Each operation generates reviewable artifacts (`result.md`, `run.jsonl`, `proposed_patches/`)
+- File modifications require a patch workflow — lead agent reviews before applying
+- Write operations must happen in git worktree, declare owned paths, and pass `git apply --check`
 
-**The idea**: MiniMax is actually pretty good at bounded sub-tasks with strong instruction following, so it's better suited as a delegated worker than a main session agent. This bridge uses that strength while keeping human-in-the-loop review at every write boundary.
+**Core idea**: MiniMax is reliable for bounded sub-tasks with good instruction following, making it suitable as a delegated worker rather than a main session agent. This leverages that while maintaining review at every write boundary.
 
 ---
 
 ## Features
 
-| Feature | What It Does |
+| Feature | Description |
 |---------|-------------|
 | **Sandboxed Execution** | File ops limited to specified directory, prevents shell injection and path traversal |
 | **Review Gate** | All code changes need lead agent approval before applying |
-| **Git Worktree Isolation** | Write ops happen in separate branches, won't touch main worktree |
+| **Git Worktree Isolation** | Write ops in separate branches, won't affect main worktree |
 | **Path Ownership** | Batch tasks declare owned paths, conflicts cause errors |
-| **Tool Loop** | Multi-step ops: read files, search, list dirs, run commands, propose patches, give final answer |
-| **Batch Execution** | Run multiple tasks in parallel, has conflict detection and dry-run |
-| **Retry with Backoff** | Auto-retries on mmx failures with exponential backoff |
-| **Artifact Output** | Each run generates `result.md`, `run.jsonl`, patch files, etc. |
+| **Tool Loop** | Multi-step ops: read files, search, list dirs, run commands, propose patches, return results |
+| **Batch Execution** | Parallel tasks with conflict detection and dry-run |
+| **Retry with Backoff** | Auto-retry on mmx failures with exponential backoff |
+| **Artifact Output** | Generates `result.md`, `run.jsonl`, patch files, etc. |
 
 ---
 
@@ -72,13 +72,13 @@ The problem: Claude Code and Codex CLI work great as lead agents, but managing m
 │  Lead Agent (Claude / Codex)                                │
 │  ├─ Delegates task to worker                                │
 │  ├─ Reviews artifacts (result.md, patches, git diff)        │
-│  └─ Decides: apply / reject / ask worker to change          │
+│  └─ Decides: apply / reject / request changes               │
 └──────────────────────────────┬──────────────────────────────┘
                                │ task prompt
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  mmx-worker-bridge                                          │
-│  ├─ Builds system prompt with tool schemas                  │
+│  ├─ Builds system prompt with available tools               │
 │  ├─ Calls mmx text chat                                     │
 │  ├─ Parses tool_use responses                               │
 │  ├─ Executes tools in sandbox                               │
@@ -94,10 +94,10 @@ The problem: Claude Code and Codex CLI work great as lead agents, but managing m
 
 ### Write Permissions
 
-| Mode | Available Tools | Can Write Files? |
-|------|----------------|------------------|
-| **Default (read-only)** | read files, search, list dirs, run read-only commands, propose patches, give answer | No — patches just saved as artifacts |
-| **Controlled write** | All above + apply_patch | Only in git worktree, only for declared owned paths, and `git apply --check` must pass |
+| Mode | Available Tools | Write Access |
+|------|----------------|--------------|
+| **Default (read-only)** | read files, search, list dirs, read-only commands, propose patches, return results | None — patches saved as artifacts |
+| **Controlled write** | All above + apply_patch | Git worktree only, declared paths only, requires `git apply --check` pass |
 
 ---
 
@@ -146,22 +146,42 @@ mmx-worker-bridge/
 
 ---
 
-## Requirements
+## Installation
 
-- Python 3.11 or newer
-- Git
-- The MiniMax `mmx` CLI installed and authenticated
+### Quick Install (For Agents)
 
-```powershell
-mmx auth
+Copy this to your agent:
+
+```
+Clone and install mmx-worker-bridge from https://github.com/eeljoe/mmx-worker-bridge, then follow the Install.md instructions to set it up.
 ```
 
-## Installation
+Or the detailed version:
+
+```
+1. git clone https://github.com/eeljoe/mmx-worker-bridge.git
+2. cd mmx-worker-bridge
+3. pip install -e .
+4. Make sure mmx CLI is installed and authenticated (mmx auth)
+5. See Install.md for detailed configuration
+```
+
+### Manual Installation
 
 ```powershell
 git clone git@github.com:eeljoe/mmx-worker-bridge.git
 cd mmx-worker-bridge
 pip install -e .
+```
+
+### Prerequisites
+
+- Python 3.11+
+- Git
+- MiniMax `mmx` CLI installed and authenticated
+
+```powershell
+mmx auth
 ```
 
 ## Quickstart
