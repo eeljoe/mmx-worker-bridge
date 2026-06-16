@@ -13,72 +13,77 @@
 
 ---
 
-## ⚠️ Project Status & Historical Context
+## ⚠️ Background & Current Status
 
-> **Important**: With the emergence of **Pi Agent**, the practical value of this project has significantly diminished.
+> **TL;DR**: With **Pi Agent** now available, this project isn't that useful anymore.
 >
-> This project was created during the era when MiniMax charged by **API call count**. At that time, API calls were abundant and cheap, making MiniMax ideal as a "grunt worker" — handling legacy code cleanup, batch refactoring, and tedious repetitive tasks. The "lead agent + external worker" architecture was a reasonable design choice.
+> I built this back when MiniMax charged by **API call count**. Calls were abundant and cheap, so it made sense to use MiniMax as a "grunt worker" — handling legacy code cleanup, batch refactoring, and tedious repetitive tasks. The "lead agent + external worker" pattern worked well at the time.
 >
-> However, the landscape has changed:
-> 1. **Pi Agent** and other advanced multi-agent frameworks can now achieve similar functionality more efficiently, with faster setup and better results
-> 2. **MiniMax has switched to token-based billing** instead of per-call billing, eliminating the original "more calls = cheaper" advantage
-> 3. In practice, building directly with Pi Agent produces far superior results compared to this bridge approach
+> But things have changed:
+> 1. **Pi Agent** came out — building multi-agent systems is now faster and better with it
+> 2. **MiniMax switched to token-based billing** instead of per-call billing, so the "more calls = cheaper" advantage is gone
+> 3. In practice, using Pi Agent directly gives way better results than this bridge approach
 >
-> **Remaining value of this project**:
-> - **Learning reference**: Understand multi-agent orchestration, review gates, and sandboxed execution design patterns
-> - **Historical case study**: Demonstrates how API pricing models (per-call vs. per-token) influence architectural choices
-> - **Security model**: The path scoping, patch validation, and ownership conflict detection patterns remain instructive
+> **Why keep this project around?**
+> - Some design patterns in the code are still worth looking at — path sandboxing, patch validation, ownership conflict detection
+> - It's a case study showing how API pricing models (per-call vs. per-token) affect architectural choices
+> - Good for learning how multi-agent orchestration works
 >
-> If you are building a similar system today, consider using Pi Agent or other modern multi-agent frameworks instead of this project.
+> If you're building something similar today, just use Pi Agent or other modern multi-agent frameworks. Don't use this.
 
 ---
 
-## Abstract
+## What This Is
 
-Modern AI coding assistants (Claude Code, Codex CLI) excel as lead agents but face challenges with multi-provider credential management and autonomous execution reliability. `mmx-worker-bridge` addresses this by wrapping the MiniMax `mmx` CLI as a **sandboxed external worker** within a lead-agent orchestration pattern.
+Basically, this wraps MiniMax's `mmx` CLI as a **sandboxed external worker**.
 
-The system implements a **review-gate architecture**: the worker operates in a root-scoped sandbox with constrained tools (file reads, search, glob discovery, read-only commands), produces reviewable artifacts (`result.md`, `run.jsonl`, `proposed_patches/`), and only applies changes through a lead-agent-approved patch workflow. Write operations require explicit git worktree isolation, path ownership declarations, and `git apply --check` validation.
+The problem: Claude Code and Codex CLI work great as lead agents, but managing multi-provider credentials is a pain, and letting AI run fully autonomous is risky. So I made this bridge:
 
-**Key insight**: MiniMax demonstrates strong instruction-following for bounded sub-agent tasks, making it more suitable as a delegated worker than a main session agent. This bridge leverages that strength while maintaining human-in-the-loop review at every write boundary.
+- Worker runs in a limited directory scope, can only use restricted tools (read files, search, run read-only commands)
+- Every operation generates reviewable artifacts (`result.md`, `run.jsonl`, `proposed_patches/`)
+- To modify files, you have to go through a patch workflow — lead agent approves before applying
+- Write operations must happen in a git worktree, you need to declare owned paths, and `git apply --check` must pass
+
+**The idea**: MiniMax is actually pretty good at bounded sub-tasks with strong instruction following, so it's better suited as a delegated worker than a main session agent. This bridge uses that strength while keeping human-in-the-loop review at every write boundary.
 
 ---
 
 ## Features
 
-| Category | Capability |
-|----------|-----------|
-| **Sandboxed Execution** | Root-scoped file operations, shell injection prevention, path traversal protection |
-| **Review Gate** | All patches require lead-agent approval before application |
-| **Git Worktree Isolation** | Write operations occur in isolated branches, never the main worktree |
-| **Path Ownership** | Batch tasks declare owned paths; overlapping ownership is rejected |
-| **Agentic Tool Loop** | Multi-step tool-use loop with `read_file`, `rg_search`, `list_dir`, `glob_find`, `run_command`, `propose_patch`, `apply_patch`, `final_answer` |
-| **Batch Execution** | Parallel task execution with conflict detection and dry-run validation |
-| **Retry with Backoff** | Exponential backoff for transient `mmx` CLI failures |
-| **Artifact Protocol** | Structured outputs: `result.md`, `run.jsonl`, `proposed_patches/*.diff`, `batch.summary.json` |
+| Feature | What It Does |
+|---------|-------------|
+| **Sandboxed Execution** | File ops limited to specified directory, prevents shell injection and path traversal |
+| **Review Gate** | All code changes need lead agent approval before applying |
+| **Git Worktree Isolation** | Write ops happen in separate branches, won't touch main worktree |
+| **Path Ownership** | Batch tasks declare owned paths, conflicts cause errors |
+| **Tool Loop** | Multi-step ops: read files, search, list dirs, run commands, propose patches, give final answer |
+| **Batch Execution** | Run multiple tasks in parallel, has conflict detection and dry-run |
+| **Retry with Backoff** | Auto-retries on mmx failures with exponential backoff |
+| **Artifact Output** | Each run generates `result.md`, `run.jsonl`, patch files, etc. |
 
 ---
 
 ## How It Works
 
-### Agentic Loop
+### Agent Loop
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Lead Agent (Claude / Codex)                                │
-│  ├─ Delegates bounded task                                  │
+│  ├─ Delegates task to worker                                │
 │  ├─ Reviews artifacts (result.md, patches, git diff)        │
-│  └─ Decides: apply / reject / request changes               │
+│  └─ Decides: apply / reject / ask worker to change          │
 └──────────────────────────────┬──────────────────────────────┘
                                │ task prompt
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  mmx-worker-bridge                                          │
-│  ├─ Constructs system prompt with tool schemas              │
-│  ├─ Invokes mmx text chat --messages-file                   │
+│  ├─ Builds system prompt with tool schemas                  │
+│  ├─ Calls mmx text chat                                     │
 │  ├─ Parses tool_use responses                               │
-│  ├─ Executes tools in sandbox (ReadOnlyTools)               │
-│  ├─ Feeds tool_result back to mmx                           │
-│  └─ Loops until final_answer or max_steps                   │
+│  ├─ Executes tools in sandbox                               │
+│  ├─ Feeds results back to mmx                               │
+│  └─ Loops until final_answer or max steps                   │
 └──────────────────────────────┬──────────────────────────────┘
                                │ mmx CLI
                                ▼
@@ -87,12 +92,12 @@ The system implements a **review-gate architecture**: the worker operates in a r
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Write Boundary
+### Write Permissions
 
-| Mode | Tools Available | Write Access |
-|------|----------------|--------------|
-| **Default (read-only)** | `read_file`, `rg_search`, `list_dir`, `glob_find`, `run_command`, `propose_patch`, `final_answer` | None — patches saved as artifacts |
-| **Controlled write** | All above + `apply_patch` | Only in git worktree, only for `--owns` paths, only after `git apply --check` passes |
+| Mode | Available Tools | Can Write Files? |
+|------|----------------|------------------|
+| **Default (read-only)** | read files, search, list dirs, run read-only commands, propose patches, give answer | No — patches just saved as artifacts |
+| **Controlled write** | All above + apply_patch | Only in git worktree, only for declared owned paths, and `git apply --check` must pass |
 
 ---
 
@@ -130,14 +135,14 @@ mmx-worker-bridge/
 
 ---
 
-## Technical Highlights
+## Technical Details
 
-- **Zero external dependencies** — pure Python 3.11+ stdlib (`dataclasses`, `subprocess`, `concurrent.futures`, `pathlib`)
-- **Protocol-oriented design** — `CompletionClient` protocol enables mock testing and alternative backends
-- **Security-first tool sandbox** — `run_command` rejects shell metacharacters (`&|;<>`\`()`), root-external paths, and write-oriented commands
-- **Patch validation pipeline** — unified diff parsing → root scope check → ownership check → `git apply --check` → `git apply`
-- **Batch ownership conflict detection** — normalizes paths and detects overlaps before execution
-- **Windows-compatible** — handles `.CMD`/`.BAT` shims via `PATHEXT` resolution
+- **Zero external dependencies** — pure Python 3.11+ stdlib, just used `dataclasses`, `subprocess`, `concurrent.futures`, `pathlib` and stuff
+- **Protocol-oriented design** — `CompletionClient` is a Protocol, easy to mock for testing, can swap backends
+- **Security-first** — `run_command` rejects shell metacharacters (`&|;<>`\`()`), paths outside root, and write-oriented commands
+- **Patch validation flow** — parse unified diff → check if in root → check ownership → `git apply --check` → actually apply
+- **Batch conflict detection** — checks for path ownership overlaps before running
+- **Windows compatible** — handles `.CMD`/`.BAT` shims via `PATHEXT` resolution
 
 ---
 
@@ -217,14 +222,14 @@ mmx-worker-bridge run-batch --tasks-file "<tasks.json>" --parallel 2
 
 ![Review Gate](docs/assets/review-gate.svg)
 
-`mmx-worker-bridge` enforces a **lead-agent review gate** for all write operations:
+`mmx-worker-bridge` enforces **lead agent review** for all write operations:
 
-1. **Default mode is read-only** — `run_command` rejects shell syntax, write commands, and root-external paths
-2. **Patches are artifacts** — `propose_patch` saves diffs for review, never applies directly
-3. **Write mode requires isolation** — `apply_patch` only works in git worktrees with `--allow-write` and `--owns` declarations
-4. **Every patch is validated** — unified diff format → root scope → ownership → `git apply --check` → `git apply`
+1. **Default is read-only** — `run_command` rejects shell syntax, write commands, paths outside root
+2. **Patches are just artifacts** — `propose_patch` just saves the diff, doesn't apply directly
+3. **Write needs isolation** — `apply_patch` only works in git worktree, needs `--allow-write` and `--owns` declarations
+4. **Every patch gets validated** — unified diff format → root scope → ownership → `git apply --check` → then actually apply
 
-The worker cannot modify files outside its declared scope. The lead agent (Claude, Codex, or human) inspects all artifacts before merging.
+Worker can't modify files outside its declared scope. Lead agent (Claude, Codex, or human) checks all artifacts before merging.
 
 ---
 
@@ -235,8 +240,8 @@ pip install pytest
 pytest tests/
 ```
 
-Test coverage includes:
-- Root scope enforcement (path traversal rejection)
+31 tests covering:
+- Root scope enforcement (path traversal gets rejected)
 - Shell injection prevention
 - Patch validation and ownership checks
 - Batch ownership conflict detection
@@ -248,7 +253,7 @@ Test coverage includes:
 
 ## Status
 
-Early extraction from a local prototype. APIs may change before the first stable release.
+Just extracted from local prototype. API might still change.
 
 ---
 
